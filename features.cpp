@@ -43,6 +43,29 @@ std::vector<int> findLocalMaxima(std::vector<float> arr, int sr, int window) {
   return maxima;
 }
 
+std::vector<int> find_peaks(std::vector<float> data, float height, float distance) {
+  std::vector<int> peaks;
+  for (int i = 1; i < data.size()-1; i++) {
+    if (data[i-1] < data[i] && data[i] > data[i+1] && data[i] > height) {
+      if (peaks.empty() || (i - peaks.back()) > distance) {
+        peaks.push_back(i);
+      }
+    }
+  }
+  return peaks;
+}
+
+std::vector<float> findRRIntervals(std::vector<float> signal, int sr) {
+  float height = findMean(signal) + 2 * findStdDev(signal);
+  float distance = sr * 0.15;
+  std::vector<int> peakInds = find_peaks(signal, height, distance);
+  std::vector<float> rrIntervals;
+  for (int i = 1; i < peakInds.size(); i++) {
+    rrIntervals.push_back((peakInds[i] - peakInds[i-1]) / sr);
+  }
+  return rrIntervals;
+}
+
 // returns the rr intervals, input is an array of RRs
 std::vector<float> rr_intervals(std::vector<int> rr, int sr) {
   std::vector<float> rr_int = {};
@@ -103,4 +126,16 @@ float findStdDev(std::vector<float> arr) {
 
   //calculate standard deviation
   return std::sqrt(var);
+}
+
+int findMedian(std::vector<float> sorted) {
+  int med = sorted.size() / 2;
+  return sorted[med];
+}
+
+int findIQR(std::vector<float> sorted) {
+  int len = sorted.size();
+  int q1 = len/2 - len/4;
+  int q3 = len/2 + len/4;
+  return sorted[q3] - sorted[q1];
 }

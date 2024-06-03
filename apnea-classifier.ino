@@ -38,8 +38,8 @@ const char* CLASSES[] = {
 #define NUM_CLASSES (sizeof(CLASSES) / sizeof(CLASSES[0]))
 
 #define RAW_SAMPLE_RATE 16000
-#define SAMPLE_RATE 50
-#define WINDOW_SIZE 1.5
+#define SAMPLE_RATE 100
+#define WINDOW_SIZE 5
 #define SAMPLES_PER_WINDOW SAMPLE_RATE*WINDOW_SIZE
 
 typedef struct {
@@ -168,10 +168,10 @@ void loop() {
       ****/
 
       extractFeatures();
-      double test[] = {0.84685714, 0.05344003, 0.835, 0.0675, 4, 7, 0.05714286, 0.1, 0.03589583, 0.03591455, 0.04174694 };
-      for (int i = 0; i < 11; i++) {
-        model_input_buffer[i] = test[i];
-      }
+      // double test[] = {0.84685714, 0.05344003, 0.835, 0.0675, 4, 7, 0.05714286, 0.1, 0.03589583, 0.03591455, 0.04174694 };
+      // for (int i = 0; i < 11; i++) {
+      //   model_input_buffer[i] = test[i];
+      // }
 
       model_input_buffer[0] = features.mean;
       model_input_buffer[1] = features.std;
@@ -184,6 +184,10 @@ void loop() {
       model_input_buffer[8] = features.sdsd;
       model_input_buffer[9] = features.rmssd;
       model_input_buffer[10] = features.mad;
+
+      for (int i = 0; i < 2; i++) {
+        Serial.println(model_input_buffer[i]);
+      }
 
       samplesRead = 0;
     }
@@ -233,10 +237,10 @@ float classifyData() {
 
   // extractFeatures(rrIntervals);
 
-  double test[] = {0.84685714, 0.05344003, 0.835, 0.0675, 4, 7, 0.05714286, 0.1, 0.03589583, 0.03591455, 0.04174694 };
-  for (int i = 0; i < 11; i++) {
-    model_input_buffer[i] = test[i];
-  }
+  // double test[] = {0.84685714, 0.05344003, 0.835, 0.0675, 4, 7, 0.05714286, 0.1, 0.03589583, 0.03591455, 0.04174694 };
+  // for (int i = 0; i < 11; i++) {
+  //   model_input_buffer[i] = test[i];
+  // }
 
   Serial.println("Invoking");
   TfLiteStatus invokeStatus = interpreter->Invoke();
@@ -260,18 +264,22 @@ void extractFeatures() {
   filter(data, filtered, 5, 35, SAMPLE_RATE, 1);
   // normalize(filtered, data); // normalize features
 
-  std::vector<float> rrIntervals = rr_intervals_from_samples(
-    filtered, 
-    SAMPLE_RATE, 
-    (int)(WINDOW_SIZE*1000)
-  );
-    // std::vector<float> rrIntervals(59); // TODO: convert to RR intervals
+  std::vector<float> rrIntervals = findRRIntervals(filtered, SAMPLE_RATE);
+  std::vector<float> sortedRR = rrIntervals;
+  std::sort(sortedRR.begin(), sortedRR.end());
+
+  for (int i = 0; i < samplesRead; i++) {
+    Serial.print(sampleBuffer[i]);
+    Serial.print(", ");
+  }
+  Serial.println();
 
   // features.mean = 0.846857; // mean
   // features.std = 0.05344003; // std
   features.mean = findMean(rrIntervals);
-  features.median = findStdDev(rrIntervals); // median
-  features.iqr = 0.0675; // iqr
+  features.std = findStdDev(rrIntervals);
+  features.median = findMedian(sortedRR); // median
+  features.iqr = findIQR(sortedRR); // iqr
   features.nn50_1 = 4; // nn50_1
   features.nn50_2 = 7; // nn50_2
   features.pnn50_1 = 0.05714286; // pnn50_1
