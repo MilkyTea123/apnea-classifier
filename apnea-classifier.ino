@@ -20,28 +20,14 @@
 #include "tensorflow/lite/micro/micro_error_reporter.h"
 #include "tensorflow/lite/micro/micro_interpreter.h"
 
+#include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
+#include "tensorflow/lite/schema/schema_generated.h"
+#include "tensorflow/lite/version.h"
+
 #include "model.h"
 #include "dsp.hpp"
 #include "features.hpp"
 #include <vector>
-
-// global variables used for TensorFlow Lite (Micro)
-tflite::MicroErrorReporter tflErrorReporter;
-
-// pull in all the TFLM ops, you can remove this line and
-// only pull in the TFLM ops you need, if would like to reduce
-// the compiled size of the sketch.
-tflite::AllOpsResolver tflOpsResolver;
-
-const tflite::Model* tflModel = nullptr;
-tflite::MicroInterpreter* tflInterpreter = nullptr;
-TfLiteTensor* tflInputTensor = nullptr;
-TfLiteTensor* tflOutputTensor = nullptr;
-
-// Create a static memory buffer for TFLM, the size may need to
-// be adjusted based on the model you are using
-constexpr int tensorArenaSize = 2 * 1024;
-byte tensorArena[tensorArenaSize];
 
 // array to map gesture index to a name
 const char* CLASSES[] = {
@@ -70,6 +56,21 @@ typedef struct {
   volatile float mad;
 } Features;
 
+namespace {
+  tflite::ErrorReporter* error_reporter = nullptr;
+  const tflite::Model* tflModel = nullptr;
+  tflite::MicroInterpreter* interpreter = nullptr;
+  TfLiteTensor* model_input = nullptr;
+  int32_t previous_time = 0;
+
+  // Create an area of memory to use for input, output, and intermediate arrays.
+  // The size of this will depend on the model you're using, and may need to be
+  // determined by experimentation.
+  constexpr int kTensorArenaSize = 2 * 1024;
+  uint8_t tensor_arena[kTensorArenaSize];
+  float_t* model_input_buffer = nullptr;
+}  // namespace
+
 short sampleBuffer[(short)(SAMPLES_PER_WINDOW)];
 short rawSampleBuffer[(int)(RAW_SAMPLE_RATE / SAMPLE_RATE)];
 // short rawSampleBuffer[1024];
@@ -78,122 +79,141 @@ volatile int rawSamplesRead = 0;
 volatile int samplesRead = 0;
 volatile uint8_t invokeFlag = 0;
 
-volatile uint8_t test_count = 0;
-
-volatile Features features = {0};
-
 void setup() {
-  // pinMode(5, INPUT);
 
   Serial.begin(115200);
   while (!Serial);
 
   Serial.println("Starting setup...");
 
-  // Initialize PDM
-  PDM.setBufferSize((int)(2*RAW_SAMPLE_RATE/SAMPLE_RATE));
-  PDM.onReceive(onPDMdata);
+  // // Initialize PDM
+  // PDM.setBufferSize((int)(2*RAW_SAMPLE_RATE/SAMPLE_RATE));
+  // PDM.onReceive(onPDMdata);
 
-  if (!PDM.begin(1, 16000)) {
-    Serial.println("Failed to start PDM.");
-    while (1);
-  } else {
-    Serial.println("PDM started successfully.");
-  }
-
-  // get the TFL representation of the model byte array
-  tflModel = tflite::GetModel(model);
-  // if (model->version() != TFLITE_SCHEMA_VERSION) {
-  //   error_reporter->Report("Model provided is schema version %d not equal "
-  //                          "to supported version %d.",
-  //                          model->version(), TFLITE_SCHEMA_VERSION);
+  // if (!PDM.begin(1, 16000)) {
+  //   Serial.println("Failed to start PDM.");
   //   while (1);
+  // } else {
+  //   Serial.println("PDM started successfully.");
   // }
 
-  // Create an interpreter to run the model
-  tflInterpreter = new tflite::MicroInterpreter(tflModel, tflOpsResolver, tensorArena, tensorArenaSize, &tflErrorReporter);
+  static tflite::MicroErrorReporter micro_error_reporter;
+  error_reporter = &micro_error_reporter;
 
-  // Allocate memory for the model's input and output tensors
-  // tflInterpreter->AllocateTensors();
-  if (tflInterpreter->AllocateTensors() != kTfLiteOk) {
-    Serial.println("AllocateTensors() failed");
-    while (1);
-  } else {
-    Serial.println("Tensors Allocated");
+  tflModel = tflite::GetModel(model);
+  if (tflModel->version() != TFLITE_SCHEMA_VERSION) {
+    TF_LITE_REPORT_ERROR(error_reporter,
+                         "Model provided is schema version %d not equal "
+                         "to supported version %d.",
+                         tflModel->version(), TFLITE_SCHEMA_VERSION);
+    return;
   }
 
-  // Print memory usage
-  Serial.print("Used bytes: ");
-  Serial.println(tflInterpreter->arena_used_bytes());
+  // tflite::AllOpsResolver tflOpsResolver;
+  tflite::AllOpsResolver micro_op_resolver;
 
-  // Check if the tensor arena size is sufficient
-  if (tflInterpreter->arena_used_bytes() > tensorArenaSize) {
-    Serial.println("ERROR: Tensor arena size is too small!");
-    while (1);
-  } else {
-    Serial.println("Tensor arena size is sufficient.");
+  static tflite::MicroInterpreter static_interpreter(
+      tflModel, micro_op_resolver, tensor_arena, kTensorArenaSize, error_reporter);
+  interpreter = &static_interpreter;
+
+  TfLiteStatus allocate_status = interpreter->AllocateTensors();
+  if (allocate_status != kTfLiteOk) {
+    TF_LITE_REPORT_ERROR(error_reporter, "AllocateTensors() failed");
+    return;
   }
 
-  // Get pointers for the model's input and output tensors
-  tflInputTensor = tflInterpreter->input(0);
-  tflOutputTensor = tflInterpreter->output(0);
-
-  printTensorShape(tflInputTensor);
-  printTensorShape(tflOutputTensor);
-
-  samplesRead = 0;
-  invokeFlag = 0;
+  // Get information about the memory area to use for the model's input.
+  model_input = interpreter->input(0);
+  if ((model_input->dims->size != 2) || (model_input->dims->data[0] != 1) ||
+      // (model_input->dims->data[1] !=
+      //  (kFeatureSliceCount * kFeatureSliceSize)) ||
+      (model_input->type != kTfLiteInt8)) {
+    TF_LITE_REPORT_ERROR(error_reporter,
+                         "Bad input tensor parameters in model");
+    return;
+  }
+  model_input_buffer = model_input->data.f;
 }
 
 void loop() {
 
-  if (!invokeFlag) {
-    if (rawSamplesRead > 0 && samplesRead <= SAMPLES_PER_WINDOW) {
-      float sum = 0.0;
-      for (int num : rawSampleBuffer) {
-        // Serial.println(num);
-        sum += num;
-      }
-      sampleBuffer[samplesRead] = sum / rawSamplesRead;
-      samplesRead++;
+  // if (!invokeFlag) {
+  //   if (rawSamplesRead > 0 && samplesRead <= SAMPLES_PER_WINDOW) {
+  //     float sum = 0.0;
+  //     for (int num : rawSampleBuffer) {
+  //       // Serial.println(num);
+  //       sum += num;
+  //     }
+  //     sampleBuffer[samplesRead] = sum / rawSamplesRead;
+  //     samplesRead++;
 
-      // Reset the raw sample read count
-      rawSamplesRead = 0;
-    }
+  //     // Reset the raw sample read count
+  //     rawSamplesRead = 0;
+  //   }
 
-    if (samplesRead >= SAMPLES_PER_WINDOW) {
+  //   if (samplesRead >= SAMPLES_PER_WINDOW) {
 
-      /****
-      * TESTING
-      ****/
-      float sum = 0.0;
-      for (int num : sampleBuffer) {
-        sum += num;
-      }
-      Serial.print("Minute Average: ");
-      Serial.println(sum / SAMPLES_PER_WINDOW);
-      features.mean = sum / SAMPLES_PER_WINDOW;
-      /****
-      * TESTING END
-      ****/
+  //     /****
+  //     * TESTING
+  //     ****/
+  //     float sum = 0.0;
+  //     for (int num : sampleBuffer) {
+  //       sum += num;
+  //     }
+  //     Serial.print("Minute Average: ");
+  //     Serial.println(sum / SAMPLES_PER_WINDOW);
+  //     features.mean = sum / SAMPLES_PER_WINDOW;
+  //     /****
+  //     * TESTING END
+  //     ****/
 
-      classifyData();
-      delay(10);
+  //     classifyData();
+  //     delay(10);
 
-      samplesRead = 0;
-    }
+  //     samplesRead = 0;
+  //   }
 
-  } else {
-    // Loop through the output tensor values from the model
-    for (int i = 0; i < NUM_CLASSES; i++) {
-      Serial.print(CLASSES[i]);
-      Serial.print(": ");
-      Serial.println(tflOutputTensor->data.f[i], 6);
-    }
-    Serial.println("Classified");
-    Serial.println();
-    invokeFlag = 0;
+  // } else {
+  //   // Loop through the output tensor values from the model
+  //   for (int i = 0; i < NUM_CLASSES; i++) {
+  //     Serial.print(CLASSES[i]);
+  //     Serial.print(": ");
+  //     Serial.println(tflOutputTensor->data.f[i], 6);
+  //   }
+  //   Serial.println("Classified");
+  //   Serial.println();
+  //   invokeFlag = 0;
+  // }
+
+  // classifyData();
+  double test[] = {0.84685714, 0.05344003, 0.835, 0.0675, 4, 7, 0.05714286, 0.1, 0.03589583, 0.03591455, 0.04174694 };
+  for (int i = 0; i < 11; i++) {
+    model_input_buffer[i] = test[i];
   }
+  delay(1000);
+  Serial.println("Invoking");
+  // validateTensorData(tflInputTensor);
+  // TfLiteStatus invokeStatus = tflInterpreter->Invoke();
+  TfLiteStatus invokeStatus = interpreter->Invoke();
+  Serial.println("Invoked");
+  if (invokeStatus != kTfLiteOk) {
+    Serial.println("Invoke failed!");
+    while (1);
+  } else {
+    Serial.println("Invoke success!");
+    invokeFlag = 1;
+  }
+
+  // Loop through the output tensor values from the model
+  TfLiteTensor* output = interpreter->output(0);
+  for (int i = 0; i < NUM_CLASSES; i++) {
+    Serial.print(CLASSES[i]);
+    Serial.print(": ");
+    Serial.println(output->data.f[i], 6);
+  }
+  Serial.println("Classified");
+  Serial.println();
+  invokeFlag = 0;
 
 }
 
@@ -211,47 +231,50 @@ void onPDMdata() {
 }
 
 float classifyData() {
-  std::vector<float> data;
-  for (int i = 0; i < samplesRead; i++) {
-    data.push_back((float)sampleBuffer[i]);
-  }
-  std::vector<float> filtered(data.size());
+  // std::vector<float> data;
+  // for (int i = 0; i < samplesRead; i++) {
+  //   data.push_back((float)sampleBuffer[i]);
+  // }
+  // std::vector<float> filtered(data.size());
 
-  filter(data, filtered, 5, 35, SAMPLE_RATE, 1);
-  // normalize(filtered, data); // normalize features
+  // filter(data, filtered, 5, 35, SAMPLE_RATE, 1);
+  // // normalize(filtered, data); // normalize features
 
-  std::vector<float> rrIntervals(data.size()-1); // TODO: convert to RR intervals
+  // std::vector<float> rrIntervals(data.size()-1); // TODO: convert to RR intervals
+    std::vector<float> rrIntervals(59); // TODO: convert to RR intervals
+
   rrIntervals = {0};
 
   extractFeatures(rrIntervals);
 
   Serial.println("Invoking");
-  validateTensorData(tflInputTensor);
-  TfLiteStatus invokeStatus = tflInterpreter->Invoke();
+  // validateTensorData(tflInputTensor);
+  // TfLiteStatus invokeStatus = tflInterpreter->Invoke();
+  TfLiteStatus invokeStatus = interpreter->Invoke();
   Serial.println("Invoked");
-  // if (invokeStatus != kTfLiteOk) {
-  //   Serial.println("Invoke failed!");
-  //   while (1);
-  // } else {
-  //   Serial.println("Invoke success!");
-  //   invokeFlag = 1;
-  // }
+  if (invokeStatus != kTfLiteOk) {
+    Serial.println("Invoke failed!");
+    while (1);
+  } else {
+    Serial.println("Invoke success!");
+    invokeFlag = 1;
+  }
 }
 
 void extractFeatures(std::vector<float> &rrIntervals) {
   // TODO assign functions to features
 
-  tflInputTensor->data.f[0] = 0.846857; // mean
-  tflInputTensor->data.f[1] = 0.05344003; // std
-  tflInputTensor->data.f[2] = 0.835; // median
-  tflInputTensor->data.f[3] = 0.0675; // iqr
-  tflInputTensor->data.f[4] = 4; // nn50_1
-  tflInputTensor->data.f[5] = 7; // nn50_2
-  tflInputTensor->data.f[6] = 0.05714286; // pnn50_1
-  tflInputTensor->data.f[7] = 0.1; // pnn50_2
-  tflInputTensor->data.f[8] = 0.03589583; // sdsd
-  tflInputTensor->data.f[9] = 0.03591455; // rmssd
-  tflInputTensor->data.f[10] = 0.04174694; // mad
+  // tflInputTensor->data.f[0] = 0.846857; // mean
+  // tflInputTensor->data.f[1] = 0.05344003; // std
+  // tflInputTensor->data.f[2] = 0.835; // median
+  // tflInputTensor->data.f[3] = 0.0675; // iqr
+  // tflInputTensor->data.f[4] = 4; // nn50_1
+  // tflInputTensor->data.f[5] = 7; // nn50_2
+  // tflInputTensor->data.f[6] = 0.05714286; // pnn50_1
+  // tflInputTensor->data.f[7] = 0.1; // pnn50_2
+  // tflInputTensor->data.f[8] = 0.03589583; // sdsd
+  // tflInputTensor->data.f[9] = 0.03591455; // rmssd
+  // tflInputTensor->data.f[10] = 0.04174694; // mad
 
   Serial.println("Features Extracted");
   delay(10);
