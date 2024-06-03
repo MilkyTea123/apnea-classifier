@@ -79,6 +79,8 @@ volatile int rawSamplesRead = 0;
 volatile int samplesRead = 0;
 volatile uint8_t invokeFlag = 0;
 
+volatile Features features = {0};
+
 void setup() {
 
   Serial.begin(115200);
@@ -86,16 +88,16 @@ void setup() {
 
   Serial.println("Starting setup...");
 
-  // // Initialize PDM
-  // PDM.setBufferSize((int)(2*RAW_SAMPLE_RATE/SAMPLE_RATE));
-  // PDM.onReceive(onPDMdata);
+  // Initialize PDM
+  PDM.setBufferSize((int)(2*RAW_SAMPLE_RATE/SAMPLE_RATE));
+  PDM.onReceive(onPDMdata);
 
-  // if (!PDM.begin(1, 16000)) {
-  //   Serial.println("Failed to start PDM.");
-  //   while (1);
-  // } else {
-  //   Serial.println("PDM started successfully.");
-  // }
+  if (!PDM.begin(1, 16000)) {
+    Serial.println("Failed to start PDM.");
+    while (1);
+  } else {
+    Serial.println("PDM started successfully.");
+  }
 
   static tflite::MicroErrorReporter micro_error_reporter;
   error_reporter = &micro_error_reporter;
@@ -125,9 +127,7 @@ void setup() {
   // Get information about the memory area to use for the model's input.
   model_input = interpreter->input(0);
   if ((model_input->dims->size != 2) || (model_input->dims->data[0] != 1) ||
-      // (model_input->dims->data[1] !=
-      //  (kFeatureSliceCount * kFeatureSliceSize)) ||
-      (model_input->type != kTfLiteInt8)) {
+      (model_input->type != kTfLiteFloat32)) {
     TF_LITE_REPORT_ERROR(error_reporter,
                          "Bad input tensor parameters in model");
     return;
@@ -137,83 +137,69 @@ void setup() {
 
 void loop() {
 
-  // if (!invokeFlag) {
-  //   if (rawSamplesRead > 0 && samplesRead <= SAMPLES_PER_WINDOW) {
-  //     float sum = 0.0;
-  //     for (int num : rawSampleBuffer) {
-  //       // Serial.println(num);
-  //       sum += num;
-  //     }
-  //     sampleBuffer[samplesRead] = sum / rawSamplesRead;
-  //     samplesRead++;
+  if (!invokeFlag) {
+    if (rawSamplesRead > 0 && samplesRead <= SAMPLES_PER_WINDOW) {
+      float sum = 0.0;
+      for (int num : rawSampleBuffer) {
+        // Serial.println(num);
+        sum += num;
+      }
+      sampleBuffer[samplesRead] = sum / rawSamplesRead;
+      samplesRead++;
 
-  //     // Reset the raw sample read count
-  //     rawSamplesRead = 0;
-  //   }
+      // Reset the raw sample read count
+      rawSamplesRead = 0;
+    }
 
-  //   if (samplesRead >= SAMPLES_PER_WINDOW) {
+    if (samplesRead >= SAMPLES_PER_WINDOW) {
 
-  //     /****
-  //     * TESTING
-  //     ****/
-  //     float sum = 0.0;
-  //     for (int num : sampleBuffer) {
-  //       sum += num;
-  //     }
-  //     Serial.print("Minute Average: ");
-  //     Serial.println(sum / SAMPLES_PER_WINDOW);
-  //     features.mean = sum / SAMPLES_PER_WINDOW;
-  //     /****
-  //     * TESTING END
-  //     ****/
+      /****
+      * TESTING
+      ****/
+      float sum = 0.0;
+      for (int num : sampleBuffer) {
+        sum += num;
+      }
+      Serial.print("Minute Average: ");
+      Serial.println(sum / SAMPLES_PER_WINDOW);
+      features.mean = sum / SAMPLES_PER_WINDOW;
+      /****
+      * TESTING END
+      ****/
 
-  //     classifyData();
-  //     delay(10);
+      extractFeatures();
+      double test[] = {0.84685714, 0.05344003, 0.835, 0.0675, 4, 7, 0.05714286, 0.1, 0.03589583, 0.03591455, 0.04174694 };
+      for (int i = 0; i < 11; i++) {
+        model_input_buffer[i] = test[i];
+      }
 
-  //     samplesRead = 0;
-  //   }
+      model_input_buffer[0] = features.mean;
+      model_input_buffer[1] = features.std;
+      model_input_buffer[2] = features.median;
+      model_input_buffer[3] = features.iqr;
+      model_input_buffer[4] = features.nn50_1;
+      model_input_buffer[5] = features.nn50_2;
+      model_input_buffer[6] = features.pnn50_1;
+      model_input_buffer[7] = features.pnn50_2;
+      model_input_buffer[8] = features.sdsd;
+      model_input_buffer[9] = features.rmssd;
+      model_input_buffer[10] = features.mad;
 
-  // } else {
-  //   // Loop through the output tensor values from the model
-  //   for (int i = 0; i < NUM_CLASSES; i++) {
-  //     Serial.print(CLASSES[i]);
-  //     Serial.print(": ");
-  //     Serial.println(tflOutputTensor->data.f[i], 6);
-  //   }
-  //   Serial.println("Classified");
-  //   Serial.println();
-  //   invokeFlag = 0;
-  // }
+      samplesRead = 0;
+    }
 
-  // classifyData();
-  double test[] = {0.84685714, 0.05344003, 0.835, 0.0675, 4, 7, 0.05714286, 0.1, 0.03589583, 0.03591455, 0.04174694 };
-  for (int i = 0; i < 11; i++) {
-    model_input_buffer[i] = test[i];
-  }
-  delay(1000);
-  Serial.println("Invoking");
-  // validateTensorData(tflInputTensor);
-  // TfLiteStatus invokeStatus = tflInterpreter->Invoke();
-  TfLiteStatus invokeStatus = interpreter->Invoke();
-  Serial.println("Invoked");
-  if (invokeStatus != kTfLiteOk) {
-    Serial.println("Invoke failed!");
-    while (1);
   } else {
-    Serial.println("Invoke success!");
-    invokeFlag = 1;
+    // Loop through the output tensor values from the model
+    TfLiteTensor* output = interpreter->output(0);
+    for (int i = 0; i < NUM_CLASSES; i++) {
+      Serial.print(CLASSES[i]);
+      Serial.print(": ");
+      Serial.println(output->data.f[i], 6);
+    }
+    Serial.println("Classified");
+    Serial.println();
+    invokeFlag = 0;
   }
-
-  // Loop through the output tensor values from the model
-  TfLiteTensor* output = interpreter->output(0);
-  for (int i = 0; i < NUM_CLASSES; i++) {
-    Serial.print(CLASSES[i]);
-    Serial.print(": ");
-    Serial.println(output->data.f[i], 6);
-  }
-  Serial.println("Classified");
-  Serial.println();
-  invokeFlag = 0;
 
 }
 
@@ -231,25 +217,28 @@ void onPDMdata() {
 }
 
 float classifyData() {
-  // std::vector<float> data;
-  // for (int i = 0; i < samplesRead; i++) {
-  //   data.push_back((float)sampleBuffer[i]);
-  // }
-  // std::vector<float> filtered(data.size());
+  std::vector<float> data;
+  for (int i = 0; i < samplesRead; i++) {
+    data.push_back((float)sampleBuffer[i]);
+  }
+  std::vector<float> filtered(data.size());
 
-  // filter(data, filtered, 5, 35, SAMPLE_RATE, 1);
-  // // normalize(filtered, data); // normalize features
+  filter(data, filtered, 5, 35, SAMPLE_RATE, 1);
+  // normalize(filtered, data); // normalize features
 
-  // std::vector<float> rrIntervals(data.size()-1); // TODO: convert to RR intervals
-    std::vector<float> rrIntervals(59); // TODO: convert to RR intervals
+  std::vector<float> rrIntervals(data.size()-1); // TODO: convert to RR intervals
+    // std::vector<float> rrIntervals(59); // TODO: convert to RR intervals
 
   rrIntervals = {0};
 
-  extractFeatures(rrIntervals);
+  // extractFeatures(rrIntervals);
+
+  double test[] = {0.84685714, 0.05344003, 0.835, 0.0675, 4, 7, 0.05714286, 0.1, 0.03589583, 0.03591455, 0.04174694 };
+  for (int i = 0; i < 11; i++) {
+    model_input_buffer[i] = test[i];
+  }
 
   Serial.println("Invoking");
-  // validateTensorData(tflInputTensor);
-  // TfLiteStatus invokeStatus = tflInterpreter->Invoke();
   TfLiteStatus invokeStatus = interpreter->Invoke();
   Serial.println("Invoked");
   if (invokeStatus != kTfLiteOk) {
@@ -261,23 +250,38 @@ float classifyData() {
   }
 }
 
-void extractFeatures(std::vector<float> &rrIntervals) {
-  // TODO assign functions to features
+void extractFeatures() {
+  std::vector<float> data;
+  for (int i = 0; i < samplesRead; i++) {
+    data.push_back((float)sampleBuffer[i]);
+  }
+  std::vector<float> filtered(data.size());
 
-  // tflInputTensor->data.f[0] = 0.846857; // mean
-  // tflInputTensor->data.f[1] = 0.05344003; // std
-  // tflInputTensor->data.f[2] = 0.835; // median
-  // tflInputTensor->data.f[3] = 0.0675; // iqr
-  // tflInputTensor->data.f[4] = 4; // nn50_1
-  // tflInputTensor->data.f[5] = 7; // nn50_2
-  // tflInputTensor->data.f[6] = 0.05714286; // pnn50_1
-  // tflInputTensor->data.f[7] = 0.1; // pnn50_2
-  // tflInputTensor->data.f[8] = 0.03589583; // sdsd
-  // tflInputTensor->data.f[9] = 0.03591455; // rmssd
-  // tflInputTensor->data.f[10] = 0.04174694; // mad
+  filter(data, filtered, 5, 35, SAMPLE_RATE, 1);
+  // normalize(filtered, data); // normalize features
+
+  std::vector<float> rrIntervals = rr_intervals_from_samples(
+    filtered, 
+    SAMPLE_RATE, 
+    (int)(WINDOW_SIZE*1000)
+  );
+    // std::vector<float> rrIntervals(59); // TODO: convert to RR intervals
+
+  // features.mean = 0.846857; // mean
+  // features.std = 0.05344003; // std
+  features.mean = findMean(rrIntervals);
+  features.median = findStdDev(rrIntervals); // median
+  features.iqr = 0.0675; // iqr
+  features.nn50_1 = 4; // nn50_1
+  features.nn50_2 = 7; // nn50_2
+  features.pnn50_1 = 0.05714286; // pnn50_1
+  features.pnn50_2 = 0.1; // pnn50_2
+  features.sdsd = 0.03589583; // sdsd
+  features.rmssd = 0.03591455; // rmssd
+  features.mad = 0.04174694; // mad
 
   Serial.println("Features Extracted");
-  delay(10);
+  invokeFlag = 1;
 }
 
 void printTensorShape(TfLiteTensor* tensor) {
