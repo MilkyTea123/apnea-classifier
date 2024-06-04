@@ -2,11 +2,13 @@
 #include <cmath>
 #include "features.hpp"
 
+using namespace std;
+
 // inputs:
 // window - in ms, how large of a window to detect for local maxima
 // sr - sampling rate
-std::vector<int> findLocalMaxima(std::vector<float> arr, int sr, int window) {
-  std::vector<int> maxima = {}; // output vector for indexes of local maxima
+vector<int> findLocalMaxima(vector<float> arr, int sr, int window) {
+  vector<int> maxima = {}; // output vector for indexes of local maxima
   int window_len = (sr * window) / 1000;
   // initializing variables
   int count = 0;
@@ -43,8 +45,8 @@ std::vector<int> findLocalMaxima(std::vector<float> arr, int sr, int window) {
   return maxima;
 }
 
-std::vector<int> find_peaks(std::vector<float> data, float height, float distance) {
-  std::vector<int> peaks;
+vector<int> find_peaks(vector<float> data, float height, float distance) {
+  vector<int> peaks;
   for (int i = 1; i < data.size()-1; i++) {
     if (data[i-1] < data[i] && data[i] > data[i+1] && data[i] > height) {
       if (peaks.empty() || (i - peaks.back()) > distance) {
@@ -55,35 +57,35 @@ std::vector<int> find_peaks(std::vector<float> data, float height, float distanc
   return peaks;
 }
 
-std::vector<float> findRRIntervals(std::vector<float> signal, int sr) {
-  float height = findMean(signal) + 2 * findStdDev(signal);
-  float distance = sr * 0.15;
-  std::vector<int> peakInds = find_peaks(signal, height, distance);
-  std::vector<float> rrIntervals;
+vector<float> findRRIntervals(vector<float> signal, int sr) {
+  float height = findMean(signal) + 1.5 * findStdDev(signal);
+  float distance = sr * 0.5;
+  vector<int> peakInds = find_peaks(signal, height, distance);
+  vector<float> rrIntervals;
   for (int i = 1; i < peakInds.size(); i++) {
-    rrIntervals.push_back((peakInds[i] - peakInds[i-1]) / sr);
+    rrIntervals.push_back((float)(peakInds[i] - peakInds[i-1]) / sr);
   }
   return rrIntervals;
 }
 
 // returns the rr intervals, input is an array of RRs
-std::vector<float> rr_intervals(std::vector<int> rr, int sr) {
-  std::vector<float> rr_int = {};
+vector<float> rr_intervals(vector<int> rr, int sr) {
+  vector<float> rr_int = {};
   // push the intervals between the RR
   for (int i = 0; i < rr.size(); i++ ) {
-    rr_int.push_back((rr[i] - rr[i-1]) / sr * 1000);
+    rr_int.push_back((rr[i] - rr[i-1]) / sr);
   }
   return rr_int;
 }
 
 // window in ms
-std::vector<float> rr_intervals_from_samples(std::vector<float> signal, int sr, int window) {
-  std::vector<int> rr = findLocalMaxima(signal, sr, window);
+vector<float> rr_intervals_from_samples(vector<float> signal, int sr, int window) {
+  vector<int> rr = findLocalMaxima(signal, sr, window);
   return rr_intervals(rr, sr);
 } 
 
 // returns mean of given array
-float findMean(std::vector<int> arr) {
+float findMean(vector<int> arr) {
   float sum = 0.0;
   for (int num : arr) {
     sum += num;
@@ -91,7 +93,7 @@ float findMean(std::vector<int> arr) {
   return sum / arr.size();
 }
 
-float findMean(std::vector<float> arr) {
+float findMean(vector<float> arr) {
   float sum = 0.0;
   for (float num : arr) {
     sum += num;
@@ -100,7 +102,7 @@ float findMean(std::vector<float> arr) {
 }
 
 // returns standard deviation of given array
-float findStdDev(std::vector<int> arr) {
+float findStdDev(vector<int> arr) {
   float mean = findMean(arr);
 
   // calculate variance
@@ -111,10 +113,10 @@ float findStdDev(std::vector<int> arr) {
   var = var / arr.size();
 
   //calculate standard deviation
-  return std::sqrt(var);
+  return sqrt(var);
 }
 
-float findStdDev(std::vector<float> arr) {
+float findStdDev(vector<float> arr) {
   float mean = findMean(arr);
 
   // calculate variance
@@ -125,17 +127,68 @@ float findStdDev(std::vector<float> arr) {
   var = var / arr.size();
 
   //calculate standard deviation
-  return std::sqrt(var);
+  return sqrt(var);
 }
 
-int findMedian(std::vector<float> sorted) {
+float findMedian(vector<float> sorted) {
   int med = sorted.size() / 2;
   return sorted[med];
 }
 
-int findIQR(std::vector<float> sorted) {
+float findIQR(vector<float> sorted) {
   int len = sorted.size();
   int q1 = len/2 - len/4;
   int q3 = len/2 + len/4;
   return sorted[q3] - sorted[q1];
 }
+
+vector<int> findNN50(vector<float> rrIntervals) {
+  vector<int> nn50 = { 0, 0 };
+  for (int i = 0; i < rrIntervals.size()-1; i++) {
+    if (rrIntervals[i] - rrIntervals[i + 1] > 0.05) {
+      nn50[0]++;
+    }
+    if (rrIntervals[i+1] - rrIntervals[i] > 0.05) {
+      nn50[1]++;
+    }
+  }
+
+  return nn50;
+}
+
+float findSDSD(vector<float> signal) {
+  vector<float> diffs;
+  for (int i = 1; i < signal.size(); i++) {
+    diffs.push_back(signal[i] - signal[i-1]);
+  }
+  int len = diffs.size();
+  float diffMean = findMean(diffs);
+  float sum = 0;
+  for (int i = 0; i < len; i++) {
+    sum += (diffs[i] - diffMean)*(diffs[i] - diffMean);
+  }
+
+  return sqrt(sum / len);
+}
+
+float findRMSSD(vector<float> signal) {
+  float sumSqrDiffs = 0;
+  int len = 0;
+  for (int i = 1; i < signal.size(); i++) {
+    sumSqrDiffs += (signal[i] - signal[i-1])*(signal[i] - signal[i-1]);
+    len++;
+  }
+
+  return sqrt(sumSqrDiffs / len);
+}
+
+float findMAD(vector<float> signal) {
+  float mean = findMean(signal);
+  float sum = 0;
+  for (float n : signal) {
+    sum += abs(n - mean);
+  }
+
+  return sum / signal.size();
+}
+  

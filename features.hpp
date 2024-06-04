@@ -1,20 +1,30 @@
 
 #include <vector>
 
-std::vector<int> findLocalMaxima(std::vector<float> arr, int sr, int window);
+using namespace std;
 
-float findMean(std::vector<int> arr);
+vector<int> findLocalMaxima(vector<float> arr, int sr, int window);
 
-float findMean(std::vector<float> arr);
+float findMean(vector<int> arr);
 
-float findStdDev(std::vector<int> arr);
+float findMean(vector<float> arr);
 
-float findStdDev(std::vector<float> arr);
+float findStdDev(vector<int> arr);
 
-int findMedian(std::vector<float> sorted);
+float findStdDev(vector<float> arr);
 
-int findIQR(std::vector<float> sorted);
+float findMedian(vector<float> sorted);
 
-std::vector<float> rr_intervals_from_samples(std::vector<float> signal, int sr, int window);\
+float findIQR(vector<float> sorted);
 
-std::vector<float> findRRIntervals(std::vector<float> signal, int sr);
+vector<int> findNN50(vector<float> rrIntervals);
+
+float findSDSD(vector<float> signal);
+
+float findRMSSD(vector<float> signal);
+
+float findMAD(vector<float> signal);
+
+vector<float> rr_intervals_from_samples(vector<float> signal, int sr, int window);
+
+vector<float> findRRIntervals(vector<float> signal, int sr);

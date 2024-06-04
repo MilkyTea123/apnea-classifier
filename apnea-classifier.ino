@@ -39,7 +39,7 @@ const char* CLASSES[] = {
 
 #define RAW_SAMPLE_RATE 16000
 #define SAMPLE_RATE 100
-#define WINDOW_SIZE 5
+#define WINDOW_SIZE 30
 #define SAMPLES_PER_WINDOW SAMPLE_RATE*WINDOW_SIZE
 
 typedef struct {
@@ -141,7 +141,6 @@ void loop() {
     if (rawSamplesRead > 0 && samplesRead <= SAMPLES_PER_WINDOW) {
       float sum = 0.0;
       for (int num : rawSampleBuffer) {
-        // Serial.println(num);
         sum += num;
       }
       sampleBuffer[samplesRead] = sum / rawSamplesRead;
@@ -152,26 +151,9 @@ void loop() {
     }
 
     if (samplesRead >= SAMPLES_PER_WINDOW) {
-
-      /****
-      * TESTING
-      ****/
-      float sum = 0.0;
-      for (int num : sampleBuffer) {
-        sum += num;
-      }
-      Serial.print("Minute Average: ");
-      Serial.println(sum / SAMPLES_PER_WINDOW);
-      features.mean = sum / SAMPLES_PER_WINDOW;
-      /****
-      * TESTING END
-      ****/
+      Serial.println("Running inference...");
 
       extractFeatures();
-      // double test[] = {0.84685714, 0.05344003, 0.835, 0.0675, 4, 7, 0.05714286, 0.1, 0.03589583, 0.03591455, 0.04174694 };
-      // for (int i = 0; i < 11; i++) {
-      //   model_input_buffer[i] = test[i];
-      // }
 
       model_input_buffer[0] = features.mean;
       model_input_buffer[1] = features.std;
@@ -185,23 +167,24 @@ void loop() {
       model_input_buffer[9] = features.rmssd;
       model_input_buffer[10] = features.mad;
 
-      for (int i = 0; i < 2; i++) {
-        Serial.println(model_input_buffer[i]);
+      for (int i = 0; i < 11; i++) {
+        Serial.print(model_input_buffer[i]);
+        Serial.print(", ");
       }
+      Serial.println();
 
       samplesRead = 0;
     }
 
   } else {
+    Serial.println("Inference Output:");
     // Loop through the output tensor values from the model
     TfLiteTensor* output = interpreter->output(0);
-    for (int i = 0; i < NUM_CLASSES; i++) {
-      Serial.print(CLASSES[i]);
-      Serial.print(": ");
-      Serial.println(output->data.f[i], 6);
-    }
-    Serial.println("Classified");
+
+    Serial.print("Apnea Likelihood: ");
+    Serial.println(output->data.f[0], 3);
     Serial.println();
+    
     invokeFlag = 0;
   }
 
@@ -220,40 +203,6 @@ void onPDMdata() {
   }
 }
 
-float classifyData() {
-  std::vector<float> data;
-  for (int i = 0; i < samplesRead; i++) {
-    data.push_back((float)sampleBuffer[i]);
-  }
-  std::vector<float> filtered(data.size());
-
-  filter(data, filtered, 5, 35, SAMPLE_RATE, 1);
-  // normalize(filtered, data); // normalize features
-
-  std::vector<float> rrIntervals(data.size()-1); // TODO: convert to RR intervals
-    // std::vector<float> rrIntervals(59); // TODO: convert to RR intervals
-
-  rrIntervals = {0};
-
-  // extractFeatures(rrIntervals);
-
-  // double test[] = {0.84685714, 0.05344003, 0.835, 0.0675, 4, 7, 0.05714286, 0.1, 0.03589583, 0.03591455, 0.04174694 };
-  // for (int i = 0; i < 11; i++) {
-  //   model_input_buffer[i] = test[i];
-  // }
-
-  Serial.println("Invoking");
-  TfLiteStatus invokeStatus = interpreter->Invoke();
-  Serial.println("Invoked");
-  if (invokeStatus != kTfLiteOk) {
-    Serial.println("Invoke failed!");
-    while (1);
-  } else {
-    Serial.println("Invoke success!");
-    invokeFlag = 1;
-  }
-}
-
 void extractFeatures() {
   std::vector<float> data;
   for (int i = 0; i < samplesRead; i++) {
@@ -261,34 +210,59 @@ void extractFeatures() {
   }
   std::vector<float> filtered(data.size());
 
-  filter(data, filtered, 5, 35, SAMPLE_RATE, 1);
+  filter(data, filtered, 2, 50, SAMPLE_RATE, 1);
   // normalize(filtered, data); // normalize features
 
   std::vector<float> rrIntervals = findRRIntervals(filtered, SAMPLE_RATE);
-  std::vector<float> sortedRR = rrIntervals;
-  std::sort(sortedRR.begin(), sortedRR.end());
+  int numIntervals = rrIntervals.size();
 
-  for (int i = 0; i < samplesRead; i++) {
-    Serial.print(sampleBuffer[i]);
+  for (int i = 0; i < filtered.size(); i++) {
+    Serial.print(filtered[i]);
     Serial.print(", ");
   }
   Serial.println();
 
-  // features.mean = 0.846857; // mean
-  // features.std = 0.05344003; // std
-  features.mean = findMean(rrIntervals);
-  features.std = findStdDev(rrIntervals);
-  features.median = findMedian(sortedRR); // median
-  features.iqr = findIQR(sortedRR); // iqr
-  features.nn50_1 = 4; // nn50_1
-  features.nn50_2 = 7; // nn50_2
-  features.pnn50_1 = 0.05714286; // pnn50_1
-  features.pnn50_2 = 0.1; // pnn50_2
-  features.sdsd = 0.03589583; // sdsd
-  features.rmssd = 0.03591455; // rmssd
-  features.mad = 0.04174694; // mad
+  if (numIntervals > 5) {
+    std::vector<int> nn50 = findNN50(rrIntervals);
 
-  Serial.println("Features Extracted");
+    features.mean = findMean(rrIntervals);
+    features.std = findStdDev(rrIntervals);
+    features.nn50_1 = nn50[0]; // nn50_1
+    features.nn50_2 = nn50[1]; // nn50_2
+    features.pnn50_1 = (float)nn50[0] / numIntervals; // pnn50_1
+    features.pnn50_2 = (float)nn50[1] / numIntervals; // pnn50_2
+    features.sdsd = findSDSD(rrIntervals); // sdsd
+    features.rmssd = findRMSSD(rrIntervals); // rmssd
+    features.mad = findMAD(rrIntervals); // mad
+
+    std::sort(rrIntervals.begin(), rrIntervals.end());
+
+    for (int i = 0; i < rrIntervals.size(); i++) {
+      Serial.print(rrIntervals[i]);
+      Serial.print(", ");
+    }
+    Serial.println();
+
+    features.median = findMedian(rrIntervals); // median
+    features.iqr = findIQR(rrIntervals); // iqr
+
+    Serial.println("Features Extracted");
+  } else {
+    features.mean = 0;
+    features.std = 0;
+    features.median = 0; // median
+    features.iqr = 0; // iqr
+    features.nn50_1 = 0; // nn50_1
+    features.nn50_2 = 0; // nn50_2
+    features.pnn50_1 = 0; // pnn50_1
+    features.pnn50_2 = 0; // pnn50_2
+    features.sdsd = 0; // sdsd
+    features.rmssd = 0; // rmssd
+    features.mad = 0; // mad
+
+    Serial.println("Features Not Found");
+  }
+
   invokeFlag = 1;
 }
 
