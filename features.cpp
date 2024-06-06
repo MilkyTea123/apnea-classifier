@@ -1,12 +1,14 @@
+/*
+  Feature extraction function implementation.
+  Contributor(s): Michael Tsien, Andrew Pan
+*/
+
 #include <vector>
 #include <cmath>
 #include "features.hpp"
 
 using namespace std;
 
-// inputs:
-// window - in ms, how large of a window to detect for local maxima
-// sr - sampling rate
 vector<int> findLocalMaxima(vector<float> arr, int sr, int window) {
   vector<int> maxima = {}; // output vector for indexes of local maxima
   int window_len = (sr * window) / 1000;
@@ -45,6 +47,7 @@ vector<int> findLocalMaxima(vector<float> arr, int sr, int window) {
   return maxima;
 }
 
+// from ChatGPT
 vector<int> find_peaks(vector<float> data, float height, float distance) {
   vector<int> peaks;
   for (int i = 1; i < data.size()-1; i++) {
@@ -57,18 +60,23 @@ vector<int> find_peaks(vector<float> data, float height, float distance) {
   return peaks;
 }
 
+// Specs from "Detection of obstructive sleep apnea through
+// ECG signal features" by Almazaydeh, Elleithy, and Faezipour.
+// https://ieeexplore.ieee.org/document/6220730
 vector<float> findRRIntervals(vector<float> signal, int sr) {
-  float height = findMean(signal) + 1.5 * findStdDev(signal);
-  float distance = sr * 0.5;
+  float height = findMean(signal) + findStdDev(signal);
+  float distance = sr * 0.15;
   vector<int> peakInds = find_peaks(signal, height, distance);
   vector<float> rrIntervals;
   for (int i = 1; i < peakInds.size(); i++) {
+    // add time intervals
     rrIntervals.push_back((float)(peakInds[i] - peakInds[i-1]) / sr);
   }
   return rrIntervals;
 }
 
 // returns the rr intervals, input is an array of RRs
+// wonky
 vector<float> rr_intervals(vector<int> rr, int sr) {
   vector<float> rr_int = {};
   // push the intervals between the RR
@@ -84,36 +92,12 @@ vector<float> rr_intervals_from_samples(vector<float> signal, int sr, int window
   return rr_intervals(rr, sr);
 } 
 
-// returns mean of given array
-float findMean(vector<int> arr) {
-  float sum = 0.0;
-  for (int num : arr) {
-    sum += num;
-  }
-  return sum / arr.size();
-}
-
 float findMean(vector<float> arr) {
   float sum = 0.0;
   for (float num : arr) {
     sum += num;
   }
   return sum / arr.size();
-}
-
-// returns standard deviation of given array
-float findStdDev(vector<int> arr) {
-  float mean = findMean(arr);
-
-  // calculate variance
-  float var = 0.0;
-  for (int num : arr) {
-    var += (num - mean) * (num - mean); 
-  }
-  var = var / arr.size();
-
-  //calculate standard deviation
-  return sqrt(var);
 }
 
 float findStdDev(vector<float> arr) {
@@ -142,25 +126,33 @@ float findIQR(vector<float> sorted) {
   return sorted[q3] - sorted[q1];
 }
 
+/*
+  The following functions use algorithms provided by ChatGPT
+*/
+
 vector<int> findNN50(vector<float> rrIntervals) {
   vector<int> nn50 = { 0, 0 };
   for (int i = 0; i < rrIntervals.size()-1; i++) {
+    // nn50_1
     if (rrIntervals[i] - rrIntervals[i + 1] > 0.05) {
       nn50[0]++;
     }
+    // nn50_2
     if (rrIntervals[i+1] - rrIntervals[i] > 0.05) {
       nn50[1]++;
     }
   }
-
   return nn50;
 }
 
 float findSDSD(vector<float> signal) {
+  // find differences in adjacent intervals
   vector<float> diffs;
   for (int i = 1; i < signal.size(); i++) {
     diffs.push_back(signal[i] - signal[i-1]);
   }
+
+  // find standard deviation of differences
   int len = diffs.size();
   float diffMean = findMean(diffs);
   float sum = 0;
@@ -174,6 +166,8 @@ float findSDSD(vector<float> signal) {
 float findRMSSD(vector<float> signal) {
   float sumSqrDiffs = 0;
   int len = 0;
+
+  // find the squares of interval differences
   for (int i = 1; i < signal.size(); i++) {
     sumSqrDiffs += (signal[i] - signal[i-1])*(signal[i] - signal[i-1]);
     len++;

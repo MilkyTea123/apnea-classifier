@@ -1,11 +1,10 @@
 /*
-  IMU Classifier
-  This example uses the on-board IMU to start reading acceleration and gyroscope
-  data from on-board IMU, once enough samples are read, it then uses a
-  TensorFlow Lite (Micro) model to try to classify the movement as a known gesture.
-  Note: The direct use of C/C++ pointers, namespaces, and dynamic memory is generally
-        discouraged in Arduino examples, and in the future the TensorFlowLite library
-        might change to make the sketch simpler.
+  EE 400a Final Project Main .ino File
+  Contributor(s): Michael Tsien
+  The main file running the apnea detection on the Arduino Nano 33 BLE.
+  Uses the microphone to read audio signals, though ideally would use
+  an ADC to collect analog voltage data from the ECG. Implemented with
+  TensorFLow Lite.
   The circuit:
   - Arduino Nano 33 BLE or Arduino Nano 33 BLE Sense board.
 */
@@ -71,10 +70,12 @@ namespace {
   float_t* model_input_buffer = nullptr;
 }  // namespace
 
+
+// initialize data buffers
 short sampleBuffer[(short)(SAMPLES_PER_WINDOW)];
 short rawSampleBuffer[(int)(RAW_SAMPLE_RATE / SAMPLE_RATE)];
-// short rawSampleBuffer[1024];
 
+// initialize counters and flag
 volatile int rawSamplesRead = 0;
 volatile int samplesRead = 0;
 volatile uint8_t invokeFlag = 0;
@@ -99,6 +100,7 @@ void setup() {
     Serial.println("PDM started successfully.");
   }
 
+  // initialize model
   static tflite::MicroErrorReporter micro_error_reporter;
   error_reporter = &micro_error_reporter;
 
@@ -137,8 +139,10 @@ void setup() {
 
 void loop() {
 
-  if (!invokeFlag) {
-    if (rawSamplesRead > 0 && samplesRead <= SAMPLES_PER_WINDOW) {
+  if (!invokeFlag) { // if window of samples collected
+    
+    // pool samples to match sample rate (100 Hz)
+    if (rawSamplesRead >= 16000.0 / SAMPLE_RATE && samplesRead <= SAMPLES_PER_WINDOW) {
       float sum = 0.0;
       for (int num : rawSampleBuffer) {
         sum += num;
@@ -150,11 +154,17 @@ void loop() {
       rawSamplesRead = 0;
     }
 
+    // extract features after window time
     if (samplesRead >= SAMPLES_PER_WINDOW) {
       Serial.println("Running inference...");
 
       extractFeatures();
 
+      samplesRead = 0;
+    }
+
+  } else {
+      // assign features to input tensor
       model_input_buffer[0] = features.mean;
       model_input_buffer[1] = features.std;
       model_input_buffer[2] = features.median;
@@ -167,18 +177,8 @@ void loop() {
       model_input_buffer[9] = features.rmssd;
       model_input_buffer[10] = features.mad;
 
-      for (int i = 0; i < 11; i++) {
-        Serial.print(model_input_buffer[i]);
-        Serial.print(", ");
-      }
-      Serial.println();
-
-      samplesRead = 0;
-    }
-
-  } else {
+    // get model output
     Serial.println("Inference Output:");
-    // Loop through the output tensor values from the model
     TfLiteTensor* output = interpreter->output(0);
 
     Serial.print("Apnea Likelihood: ");
@@ -190,6 +190,7 @@ void loop() {
 
 }
 
+// PDM callback to store PDM data
 void onPDMdata() {
   // Query the number of available bytes
   int bytesAvailable = PDM.available();
@@ -204,29 +205,24 @@ void onPDMdata() {
 }
 
 void extractFeatures() {
+  // convert data to vector type
   std::vector<float> data;
   for (int i = 0; i < samplesRead; i++) {
     data.push_back((float)sampleBuffer[i]);
   }
+  // filter data
   std::vector<float> filtered(data.size());
-
   filter(data, filtered, 2, 50, SAMPLE_RATE, 1);
-  // normalize(filtered, data); // normalize features
 
+  // find times between R-peaks
   std::vector<float> rrIntervals = findRRIntervals(filtered, SAMPLE_RATE);
   int numIntervals = rrIntervals.size();
 
-  for (int i = 0; i < filtered.size(); i++) {
-    Serial.print(filtered[i]);
-    Serial.print(", ");
-  }
-  Serial.println();
-
   if (numIntervals > 5) {
-    std::vector<int> nn50 = findNN50(rrIntervals);
+    std::vector<int> nn50 = findNN50(rrIntervals); // nn50 values
 
-    features.mean = findMean(rrIntervals);
-    features.std = findStdDev(rrIntervals);
+    features.mean = findMean(rrIntervals); // mean
+    features.std = findStdDev(rrIntervals); // standard deviation
     features.nn50_1 = nn50[0]; // nn50_1
     features.nn50_2 = nn50[1]; // nn50_2
     features.pnn50_1 = (float)nn50[0] / numIntervals; // pnn50_1
@@ -237,19 +233,13 @@ void extractFeatures() {
 
     std::sort(rrIntervals.begin(), rrIntervals.end());
 
-    for (int i = 0; i < rrIntervals.size(); i++) {
-      Serial.print(rrIntervals[i]);
-      Serial.print(", ");
-    }
-    Serial.println();
-
     features.median = findMedian(rrIntervals); // median
     features.iqr = findIQR(rrIntervals); // iqr
 
     Serial.println("Features Extracted");
   } else {
-    features.mean = 0;
-    features.std = 0;
+    features.mean = 0; // mean
+    features.std = 0; // standard deviation
     features.median = 0; // median
     features.iqr = 0; // iqr
     features.nn50_1 = 0; // nn50_1
