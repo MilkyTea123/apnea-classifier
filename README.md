@@ -2,6 +2,10 @@
 by the Sleepiest Soldiers<br>
 Contributors: Michael Tsien, Anya Guyton, Andrew Pan, Andy Cai
 ## Snoring Detection
+### Training and Deploying
+To classify snoring, we used the "Snoring Dataset" (https://www.kaggle.com/datasets/tareqkhanemu/snoring) from Kaggle by Tareq Khan. The dataset contains 1000 1-second audio samples, 500 with snoring and the other 500 without. We uploaded the files to Edge Impulse and trained a classification model using an MFCC for data processing. We then deployed the model provided by Edge Impulse to the Arduino Nano 33 BLE Sense. Then, we modified the provided file to update the output pressure of the CPAP machine based on the detection of snoring.
+### Testing
+To test the application, we first uploaded the program to the Arduino Nano 33 BLE Sense. Then, you could make or play any snoring sound and observe the Serial Monitor output to see whether snoring is detected and how the pressure is updated.
 ## ECG Signal Classification
 To classify ECG data, we looked at "Detection of obstructive sleep apnea through ECG signal features" (https://ieeexplore.ieee.org/document/6220730) by L. Almazaydeh, K. Elleithy and M. Faezipour to find critical features to train our machine learning model. Training used the "Apnea-ECG Dataset" from Physionet (https://physionet.org/content/apnea-ecg/1.0.0/), which contained ECG readings lasting about 7 to 10 hours for each of 35 patients with each minute annotated by experts to denote whether the patient was experiencing an apnea episode. The data included multiple filetypes, but for our project, we only needed the .apn, .hea files for annotation labels, and .dat for the ECG signal values. These files can be found in the apnea.zip file in the main directory of the repository.
 ### Data Preprocessing and Training
